@@ -73,6 +73,9 @@
   #define SPI_AVR_EIMSK	 GIMSK
 #endif
 
+extern "C" void	SPI_STC_vect(void);
+
+
 class SPISettings {
 public:
 	SPISettings(uint32_t clock, uint8_t bitOrder, uint8_t dataMode) {
@@ -157,6 +160,7 @@ private:
 };
 
 
+
 class SPIClass {
 public:
 	// Initialize the SPI library
@@ -228,7 +232,7 @@ public:
 		}
 		return out.val;
 	}
-	inline static void transfer(void *buf, size_t count) {
+	inline static void transfer(void *buf, uint32_t count) {
 		if (count == 0) return;
 		uint8_t *p = (uint8_t *)buf;
 		SPDR = *p;
@@ -243,30 +247,15 @@ public:
 		*p = SPDR;
 	}
 
-	inline static void transfer(const void * buf, void * retbuf, uint32_t count) {
-		if (count == 0) return;
+	static void setTransferWriteFill(uint16_t ch ) {_transferWriteFill = ch;}
+	static void transfer(const void * buf, void * retbuf, uint32_t count);
+	static void transfer16(const uint16_t * buf, uint16_t * retbuf, uint32_t count);
 
-		const uint8_t *p = (const uint8_t *)buf;
-		uint8_t *pret = (uint8_t *)retbuf;
-		uint8_t in;
-
-		SPDR = p ? *p++ : 0;
-		while (--count > 0) {
-			uint8_t out = p ? *p++ : 0;;
-			while (!(SPSR & _BV(SPIF))) ;
-			in = SPDR;
-			SPDR = out;
-			if (pret)*pret++ = in;
-		}
-		while (!(SPSR & _BV(SPIF))) ;
-		in = SPDR;
-		if (pret)*pret = in;
-	}
-
-
-	static bool transfer(const void *txBuffer, void *rxBuffer, size_t count, void(*callback)(void));
-    inline static void flush(void);
-    inline static bool done(void);
+	// Asynch support (DMA )
+    static bool transfer(const void *txBuffer, void *rxBuffer, uint32_t count, void(*callback)(void));
+	static bool transfer16(const uint16_t * buf, uint16_t * retbuf, uint32_t count, void(*callback)(void));
+    static void flush(void);
+    static bool done(void);
 
 	// After performing a group of transfers and releasing the chip select
 	// signal, this function allows others to access the SPI bus
@@ -323,6 +312,9 @@ private:
 	#ifdef SPI_TRANSACTION_MISMATCH_LED
 	static uint8_t inTransactionFlag;
 	#endif
+	static uint16_t _transferWriteFill;
+
+	friend void	SPI_STC_vect(void);
 };
 
 extern SPIClass SPI;

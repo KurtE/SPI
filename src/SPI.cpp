@@ -25,6 +25,7 @@ uint8_t SPIClass::interruptSave = 0;
 #ifdef SPI_TRANSACTION_MISMATCH_LED
 uint8_t SPIClass::inTransactionFlag = 0;
 #endif
+uint16_t SPIClass::_transferWriteFill = 0;
 
 void SPIClass::begin()
 {
@@ -139,13 +140,52 @@ void SPIClass::usingInterrupt(uint8_t interruptNumber)
 // Some globals used for Async support
 uint8_t *_spi_async_txBuffer;
 uint8_t *_spi_async_rxBuffer;
-size_t  _spi_async_count;
+uint32_t  _spi_async_count;
 void (*_spi_async_callback)(void);
 volatile bool _spi_async_active = false;
+volatile uint8_t _spi_transfer16_active_state = 0;
+
+
+void SPIClass::transfer(const void * buf, void * retbuf, uint32_t count) {
+	if (count == 0) return;
+
+	const uint8_t *p = (const uint8_t *)buf;
+	uint8_t *pret = (uint8_t *)retbuf;
+	uint8_t in;
+
+	uint8_t out = p ? *p++ : (_transferWriteFill & 0xff);
+	SPDR = out;
+	while (--count > 0) {
+		if (p) {
+			out = *p++;
+		}
+		while (!(SPSR & _BV(SPIF))) ;
+		in = SPDR;
+		SPDR = out;
+		if (pret)*pret++ = in;
+	}
+	while (!(SPSR & _BV(SPIF))) ;
+	in = SPDR;
+	if (pret)*pret = in;
+}
+
+void SPIClass::transfer16(const uint16_t * buf, uint16_t* retbuf, uint32_t count) {
+	uint16_t out = _transferWriteFill;
+	while (count--) {
+		if (buf) {
+			out = *buf++;
+		}
+		uint16_t retval = transfer16(out);
+		if (retbuf) {
+			*retbuf++ = retval;
+		}
+	}
+}
 
 
 
-bool SPIClass::transfer(const void *txBuffer, void *rxBuffer, size_t count, void(*callback)(void)) {
+
+bool SPIClass::transfer(const void *txBuffer, void *rxBuffer, uint32_t count, void(*callback)(void)) {
 	if (count == 0) return false;
 	if (_spi_async_active) return false;
 
@@ -156,7 +196,24 @@ bool SPIClass::transfer(const void *txBuffer, void *rxBuffer, size_t count, void
 
 	// setup to output the first byte
 	_spi_async_active = true;
-	SPDR = _spi_async_txBuffer ? *_spi_async_txBuffer++ : 0;
+	SPDR = _spi_async_txBuffer ? *_spi_async_txBuffer++ : (_transferWriteFill & 0xff);
+	attachInterrupt();
+	return true;
+}
+
+bool SPIClass::transfer16(const uint16_t *txBuffer, uint16_t *rxBuffer, uint32_t count, void(*callback)(void)) {
+	if (count == 0) return false;
+	if (_spi_async_active) return false;
+
+ 	_spi_async_txBuffer = (uint8_t*)txBuffer;
+	_spi_async_rxBuffer = (uint8_t*)rxBuffer;
+	_spi_async_count = count;
+	_spi_async_callback = callback;
+
+	// setup to output the first byte
+	_spi_async_active = true;
+	_spi_transfer16_active_state = 1; 	// doing MSB
+	SPDR = _spi_async_txBuffer ? _spi_async_txBuffer[1] : (_transferWriteFill & 0xff);
 	attachInterrupt();
 	return true;
 }
@@ -176,23 +233,57 @@ ISR(SPI_STC_vect)
 {
 	// Get the return value
 	uint8_t in = SPDR;
+	if (_spi_transfer16_active_state) {
+		// 16 bit mode, LSB/MSB state... 
+		if (_spi_async_rxBuffer) {
+			if (_spi_transfer16_active_state == 1) {
+				_spi_async_rxBuffer[1] = in;
+			} else {
+				_spi_async_rxBuffer[0] = in;
+				_spi_async_rxBuffer += 2;	// advance. 
+			}
+		}
 
-	if (_spi_async_rxBuffer)
-		*_spi_async_rxBuffer++ = in;
+		// Now see if we need to transfer new item. 
+		if (_spi_transfer16_active_state == 1) {
+			if (_spi_async_txBuffer) {
+				SPDR = _spi_async_txBuffer[0];
+				_spi_async_txBuffer += 2;
+			} else {
+				SPDR = (SPI._transferWriteFill >> 8);
+			}
+		} else {
+			if (--_spi_async_count) {
+				SPDR = _spi_async_txBuffer ? _spi_async_txBuffer[1] : (SPI._transferWriteFill & 0xff);
+			} else {
+				// We are done, so disable the interrupt, plus clear the active flag and then call callback
+				_spi_async_active = false;
+				_spi_transfer16_active_state = 0;
+				SPI.detachInterrupt();
+				if (_spi_async_callback)
+	    			(*_spi_async_callback)();
+	    	}
+		}	
 
-	if (--_spi_async_count) {
-		if (_spi_async_txBuffer)
-			SPDR = *_spi_async_txBuffer++;
-		else
-			SPDR = 0;
 	} else {
-		// We are done, so disable the interrupt, plus clear the active flag and then call callback
-		_spi_async_active = false;
-		SPI.detachInterrupt();
-		if (_spi_async_callback)
-    		(*_spi_async_callback)();
+		// standard 8 bit transfer.
+		if (_spi_async_rxBuffer) {
+			*_spi_async_rxBuffer++ = in;
+		}
 
-	}	
+		if (--_spi_async_count) {
+			if (_spi_async_txBuffer)
+				SPDR = *_spi_async_txBuffer++;
+			else
+				SPDR = (SPI._transferWriteFill & 0xff);
+		} else {
+			// We are done, so disable the interrupt, plus clear the active flag and then call callback
+			_spi_async_active = false;
+			SPI.detachInterrupt();
+			if (_spi_async_callback)
+	    		(*_spi_async_callback)();
+		}	
+	}
 
 
 }
