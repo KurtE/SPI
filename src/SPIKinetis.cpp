@@ -162,54 +162,77 @@ void SPIClass::transfer(const void * buf, void * retbuf, size_t count)
 {
 
 	if (count == 0) return;
-	const uint8_t *p_write = (const uint8_t *)buf;
-	uint8_t *p_read = (uint8_t *)retbuf;
-	size_t count_read = count;
+	if (!(port.CTAR0 & SPI_CTAR_LSBFE)) {
+		// We are doing the standard MSB order
+		const uint8_t *p_write = (const uint8_t *)buf;
+		uint8_t *p_read = (uint8_t *)retbuf;
+		size_t count_read = count;
 
-	// Lets clear the reader queue
-	port.MCR = SPI_MCR_MSTR | SPI_MCR_CLR_RXF | SPI_MCR_PCSIS(0x1F);
+		// Lets clear the reader queue
+		port.MCR = SPI_MCR_MSTR | SPI_MCR_CLR_RXF | SPI_MCR_PCSIS(0x1F);
 
-	uint32_t sr;
+		uint32_t sr;
 
-	// Now lets loop while we still have data to output
-	if (count & 1) {
-	    if (p_write) {
-			if (count > 1)
-				port.PUSHR = *p_write++ | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
-			else
-				port.PUSHR = *p_write++ | SPI_PUSHR_CTAS(0);
-		} else {
-			if (count > 1)
-				port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
-			else
-				port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CTAS(0);
+		// Now lets loop while we still have data to output
+		if (count & 1) {
+		    if (p_write) {
+				if (count > 1)
+					port.PUSHR = *p_write++ | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
+				else
+					port.PUSHR = *p_write++ | SPI_PUSHR_CTAS(0);
+			} else {
+				if (count > 1)
+					port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
+				else
+					port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CTAS(0);
+			}
+			count--;
 		}
-		count--;
-	}
 
-    uint16_t w =  (uint16_t)((_transferWriteFill & 0xff) << 8) | (_transferWriteFill & 0xff);
+	    uint16_t w =  (uint16_t)((_transferWriteFill & 0xff) << 8) | (_transferWriteFill & 0xff);
 
-	while (count > 0) {
-		// Push out the next byte; 
-	    if (p_write) {
-	    	w = (*p_write++) << 8;
-			w |= *p_write++;
-	    }
-	    uint16_t queue_full_status_mask = (hardware.queue_size-1) << 12;
-		if (count == 2)
-			port.PUSHR = w | SPI_PUSHR_CTAS(1);
-		else	
-			port.PUSHR = w | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(1);
-		count -= 2; // how many bytes to output.
-		// Make sure queue is not full before pushing next byte out
-		do {
+		while (count > 0) {
+			// Push out the next byte; 
+		    if (p_write) {
+		    	w = (*p_write++) << 8;
+				w |= *p_write++;
+		    }
+		    uint16_t queue_full_status_mask = (hardware.queue_size-1) << 12;
+			if (count == 2)
+				port.PUSHR = w | SPI_PUSHR_CTAS(1);
+			else	
+				port.PUSHR = w | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(1);
+			count -= 2; // how many bytes to output.
+			// Make sure queue is not full before pushing next byte out
+			do {
+				sr = port.SR;
+				if (sr & 0xF0)  {
+					uint16_t w = port.POPR;  // Read any pending RX bytes in
+					if (count_read & 1) {
+						if (p_read) {
+							*p_read++ = w;  // Read any pending RX bytes in
+						} 
+						count_read--;
+					} else {
+						if (p_read) {
+							*p_read++ = w >> 8;
+							*p_read++ = (w & 0xff);
+						}
+						count_read -= 2;
+					}
+				}
+			} while ((sr & (15 << 12)) > queue_full_status_mask);
+
+		}
+
+		// now lets wait for all of the read bytes to be returned...
+		while (count_read) {
 			sr = port.SR;
 			if (sr & 0xF0)  {
 				uint16_t w = port.POPR;  // Read any pending RX bytes in
 				if (count_read & 1) {
-					if (p_read) {
+					if (p_read)
 						*p_read++ = w;  // Read any pending RX bytes in
-					} 
 					count_read--;
 				} else {
 					if (p_read) {
@@ -219,25 +242,86 @@ void SPIClass::transfer(const void * buf, void * retbuf, size_t count)
 					count_read -= 2;
 				}
 			}
-		} while ((sr & (15 << 12)) > queue_full_status_mask);
+		}
+	} else {
+		// We are doing the less ofen LSB mode
+		const uint8_t *p_write = (const uint8_t *)buf;
+		uint8_t *p_read = (uint8_t *)retbuf;
+		size_t count_read = count;
 
-	}
+		// Lets clear the reader queue
+		port.MCR = SPI_MCR_MSTR | SPI_MCR_CLR_RXF | SPI_MCR_PCSIS(0x1F);
 
-	// now lets wait for all of the read bytes to be returned...
-	while (count_read) {
-		sr = port.SR;
-		if (sr & 0xF0)  {
-			uint16_t w = port.POPR;  // Read any pending RX bytes in
-			if (count_read & 1) {
-				if (p_read)
-					*p_read++ = w;  // Read any pending RX bytes in
-				count_read--;
+		uint32_t sr;
+
+		// Now lets loop while we still have data to output
+		if (count & 1) {
+		    if (p_write) {
+				if (count > 1)
+					port.PUSHR = *p_write++ | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
+				else
+					port.PUSHR = *p_write++ | SPI_PUSHR_CTAS(0);
 			} else {
-				if (p_read) {
-					*p_read++ = w >> 8;
-					*p_read++ = (w & 0xff);
+				if (count > 1)
+					port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(0);
+				else
+					port.PUSHR = (_transferWriteFill & 0xff) | SPI_PUSHR_CTAS(0);
+			}
+			count--;
+		}
+
+	    uint16_t w = _transferWriteFill;
+
+		while (count > 0) {
+			// Push out the next byte; 
+		    if (p_write) {
+				w = *p_write++;
+		    	w |= ((*p_write++) << 8);
+		    }
+		    uint16_t queue_full_status_mask = (hardware.queue_size-1) << 12;
+			if (count == 2)
+				port.PUSHR = w | SPI_PUSHR_CTAS(1);
+			else	
+				port.PUSHR = w | SPI_PUSHR_CONT | SPI_PUSHR_CTAS(1);
+			count -= 2; // how many bytes to output.
+			// Make sure queue is not full before pushing next byte out
+			do {
+				sr = port.SR;
+				if (sr & 0xF0)  {
+					uint16_t w = port.POPR;  // Read any pending RX bytes in
+					if (count_read & 1) {
+						if (p_read) {
+							*p_read++ = w;  // Read any pending RX bytes in
+						} 
+						count_read--;
+					} else {
+						if (p_read) {
+							*p_read++ = (w & 0xff);
+							*p_read++ = w >> 8;
+						}
+						count_read -= 2;
+					}
 				}
-				count_read -= 2;
+			} while ((sr & (15 << 12)) > queue_full_status_mask);
+
+		}
+
+		// now lets wait for all of the read bytes to be returned...
+		while (count_read) {
+			sr = port.SR;
+			if (sr & 0xF0)  {
+				uint16_t w = port.POPR;  // Read any pending RX bytes in
+				if (count_read & 1) {
+					if (p_read)
+						*p_read++ = w;  // Read any pending RX bytes in
+					count_read--;
+				} else {
+					if (p_read) {
+						*p_read++ = (w & 0xff);
+						*p_read++ = w >> 8;
+					}
+					count_read -= 2;
+				}
 			}
 		}
 	}
