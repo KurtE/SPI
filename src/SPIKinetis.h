@@ -68,6 +68,9 @@ extern void dumpDMA_TCD(const char *psz, DMABaseClass *dmabc);
 // pointers, either of which could be NULL
 #define SPI_HAS_TRANSFER_BUF 1
 
+// SPI_HAS_TRANSFER_ASYNC - Defined to say that the SPI supports an ASYNC version
+// of the SPI_HAS_TRANSFER_BUF
+#define SPI_HAS_TRANSFER_ASYNC 1
 
 #ifndef LSBFIRST
 #define LSBFIRST 0
@@ -199,37 +202,36 @@ private:
 
 
 
-class  SPIClass {
+class SPIClass { // Teensy 3.x
 public:
 #if defined(__MK20DX128__) || defined(__MK20DX256__)
 	static const uint8_t CNT_MISO_PINS = 2;
-	static const uint8_t CNT_MMOSI_PINS = 2;
+	static const uint8_t CNT_MOSI_PINS = 2;
 	static const uint8_t CNT_SCK_PINS = 2;
 	static const uint8_t CNT_CS_PINS = 9;
 #elif defined(__MK64FX512__) || defined(__MK66FX1M0__)
 	static const uint8_t CNT_MISO_PINS = 4;
-	static const uint8_t CNT_MMOSI_PINS = 4;
+	static const uint8_t CNT_MOSI_PINS = 4;
 	static const uint8_t CNT_SCK_PINS = 3;
 	static const uint8_t CNT_CS_PINS = 11;
-
 #endif
 	typedef struct {
 		volatile uint32_t &clock_gate_register;
 		uint32_t clock_gate_mask;
-		uint8_t	 queue_size; 
-		uint8_t  spi_irq; 
+		uint8_t  queue_size;
+		uint8_t  spi_irq;
 		uint32_t max_dma_count;
 		uint8_t  tx_dma_channel;
-		uint8_t	 rx_dma_channel;
-		void	 (*dma_rxisr)();
+		uint8_t  rx_dma_channel;
+		void     (*dma_rxisr)();
 		uint8_t  miso_pin[CNT_MISO_PINS];
 		uint8_t  miso_mux[CNT_MISO_PINS];
-		uint8_t  mosi_pin[CNT_MMOSI_PINS];
-		uint8_t  mosi_mux[CNT_MMOSI_PINS];
+		uint8_t  mosi_pin[CNT_MOSI_PINS];
+		uint8_t  mosi_mux[CNT_MOSI_PINS];
 		uint8_t  sck_pin[CNT_SCK_PINS];
 		uint8_t  sck_mux[CNT_SCK_PINS];
-		uint8_t	 cs_pin[CNT_CS_PINS];
-		uint8_t	 cs_mux[CNT_CS_PINS];
+		uint8_t  cs_pin[CNT_CS_PINS];
+		uint8_t  cs_mux[CNT_CS_PINS];
 		uint8_t  cs_mask[CNT_CS_PINS];
 	} SPI_Hardware_t;
 	static const SPI_Hardware_t spi0_hardware;
@@ -237,22 +239,10 @@ public:
 	static const SPI_Hardware_t spi2_hardware;
 
 	enum DMAState { notAllocated, idle, active, completed};
-
-	SPIClass(KINETISK_SPI_t &myport, const SPI_Hardware_t &myhardware)
-		: port(myport), hardware(myhardware), _transferWriteFill(0), 
-		 _dma_state(DMAState::notAllocated)
-	   {
-	   		mosi_pin_index = 0;
-	   		miso_pin_index = 0;
-	   		sck_pin_index = 0;
-	   		interruptMasksUsed = 0;
-	   		_dmaTX = nullptr;
-	   		_dmaRX = nullptr;
-			#ifdef SPI_TRANSACTION_MISMATCH_LED
-			inTransactionFlag = 0;
-			#endif
-
-		}
+public:
+	constexpr SPIClass(uintptr_t myport, uintptr_t myhardware)
+		: port_addr(myport), hardware_addr(myhardware) {
+	}
 
 	// Initialize the SPI library
 	void begin();
@@ -282,7 +272,7 @@ public:
 	// Before using SPI.transfer() or asserting chip select pins,
 	// this function is used to gain exclusive access to the SPI bus
 	// and configure the correct settings.
-	inline void beginTransaction(SPISettings settings) {
+	void beginTransaction(SPISettings settings) {
 		if (interruptMasksUsed) {
 			__disable_irq();
 			if (interruptMasksUsed & 0x01) {
@@ -316,31 +306,28 @@ public:
 		}
 		inTransactionFlag = 1;
 		#endif
-		if (port.CTAR0 != settings.ctar) {
-			port.MCR = SPI_MCR_MDIS | SPI_MCR_HALT | SPI_MCR_PCSIS(0x1F);
-			port.CTAR0 = settings.ctar;
-			port.CTAR1 = settings.ctar| SPI_CTAR_FMSZ(8);
-			port.MCR = SPI_MCR_MSTR | SPI_MCR_PCSIS(0x1F);
+		if (port().CTAR0 != settings.ctar) {
+			port().MCR = SPI_MCR_MDIS | SPI_MCR_HALT | SPI_MCR_PCSIS(0x1F);
+			port().CTAR0 = settings.ctar;
+			port().CTAR1 = settings.ctar| SPI_CTAR_FMSZ(8);
+			port().MCR = SPI_MCR_MSTR | SPI_MCR_PCSIS(0x1F);
 		}
 	}
 
 	// Write to the SPI bus (MOSI pin) and also receive (MISO pin)
-	inline uint8_t transfer(uint8_t data) {
-		port.SR = SPI_SR_TCF;
-		port.PUSHR = data;
-		while (!(port.SR & SPI_SR_TCF)) ; // wait
-		return port.POPR;
+	uint8_t transfer(uint8_t data) {
+		port().SR = SPI_SR_TCF;
+		port().PUSHR = data;
+		while (!(port().SR & SPI_SR_TCF)) ; // wait
+		return port().POPR;
 	}
-	inline uint16_t transfer16(uint16_t data) {
-		port.SR = SPI_SR_TCF;
-		port.PUSHR = data | SPI_PUSHR_CTAS(1);
-		while (!(port.SR & SPI_SR_TCF)) ; // wait
-		return port.POPR;
+	uint16_t transfer16(uint16_t data) {
+		port().SR = SPI_SR_TCF;
+		port().PUSHR = data | SPI_PUSHR_CTAS(1);
+		while (!(port().SR & SPI_SR_TCF)) ; // wait
+		return port().POPR;
 	}
-	inline void transfer(void *buf, size_t count) {
-		transfer(buf, buf, count);
-	}
-
+	void transfer(void *buf, size_t count);
 	void setTransferWriteFill(uint16_t ch ) {_transferWriteFill = ch;}
 	void transfer(const void * buf, void * retbuf, size_t count);
 	void transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count);
@@ -357,9 +344,7 @@ public:
 
 	inline void dma_rxisr(void);
 
-
 	// After performing a group of transfers and releasing the chip select
-	
 	// signal, this function allows others to access the SPI bus
 	
 	inline void endTransaction(void) {
@@ -405,7 +390,7 @@ public:
 
 	// This function is deprecated.	 New applications should use
 	// beginTransaction() to configure SPI settings.
-	inline void setClockDivider(uint8_t clockDiv) {
+	void setClockDivider(uint8_t clockDiv) {
 		if (clockDiv == SPI_CLOCK_DIV2) {
 			setClockDivider_noInline(SPISettings(12000000, MSBFIRST, SPI_MODE0).ctar);
 		} else if (clockDiv == SPI_CLOCK_DIV4) {
@@ -427,21 +412,19 @@ public:
 	// These undocumented functions should not be used.  SPI.transfer()
 	// polls the hardware flag which is automatically cleared as the
 	// AVR responds to SPI's interrupt
-	inline void attachInterrupt() { }
-	inline void detachInterrupt() { }
+	void attachInterrupt() { }
+	void detachInterrupt() { }
 
 	// Teensy 3.x can use alternate pins for these 3 SPI signals.
 	void setMOSI(uint8_t pin);
 	void setMISO(uint8_t pin);
 	void setSCK(uint8_t pin);
 
-	// helper functions if pin is valid for the SPI special pin
-	bool pinIsMISO(uint8_t pin);
-	bool pinIsMOSI(uint8_t pin);
-	bool pinIsSCK(uint8_t pin);
-
 	// return true if "pin" has special chip select capability
 	uint8_t pinIsChipSelect(uint8_t pin);
+	bool pinIsMOSI(uint8_t pin);
+	bool pinIsMISO(uint8_t pin);
+	bool pinIsSCK(uint8_t pin);
 	// return true if both pin1 and pin2 have independent chip select capability
 	bool pinIsChipSelect(uint8_t pin1, uint8_t pin2);
 	// configure a pin for chip select and return its SPI_MCR_PCSIS bitmask
@@ -449,37 +432,36 @@ public:
 	// programs/sketches.  See the ILI3941_t3 library for an example.
 	uint8_t setCS(uint8_t pin);
 
-	inline KINETISK_SPI_t& SPIRegisters() {return port;}
-	inline uint8_t queueSize() {return hardware.queue_size;}
+	inline KINETISK_SPI_t& SPIRegisters() {return port();}
+	inline uint8_t queueSize() {return hardware().queue_size;}
 
 // BUGBUG:: move back to private right now here to debug
-	DMAChannel   *_dmaTX;
-	DMAChannel    *_dmaRX;
+	DMAChannel   *_dmaTX = nullptr;
+	DMAChannel    *_dmaRX = nullptr;
 private:
-	bool initDMAChannels();
+	KINETISK_SPI_t & port() { return *(KINETISK_SPI_t *)port_addr; }
+	const SPI_Hardware_t & hardware() { return *(const SPI_Hardware_t *)hardware_addr; }
 	void updateCTAR(uint32_t ctar);
-	void enable_pins(void);
-	void disable_pins(void);
+	uintptr_t port_addr;
+	uintptr_t hardware_addr;
+	uint8_t miso_pin_index = 0;
+	uint8_t mosi_pin_index = 0;
+	uint8_t sck_pin_index = 0;
+	uint8_t interruptMasksUsed = 0;
+	uint32_t interruptMask[(NVIC_NUM_INTERRUPTS+31)/32] = {};
+	uint32_t interruptSave[(NVIC_NUM_INTERRUPTS+31)/32] = {};
+	#ifdef SPI_TRANSACTION_MISMATCH_LED
+	uint8_t inTransactionFlag = 0;
+	#endif
 
-	KINETISK_SPI_t &port;
-	const SPI_Hardware_t &hardware;
-	uint8_t miso_pin_index;
-	uint8_t mosi_pin_index;
-	uint8_t sck_pin_index;
-	uint16_t _transferWriteFill;
+	uint16_t _transferWriteFill = 0;
 
 	// DMA Support
-	DMAState     _dma_state;
-	uint32_t	_dma_count_remaining;	// How many bytes left to output after current DMA completes
+	bool initDMAChannels();
+	DMAState     _dma_state = DMAState::notAllocated;
+	uint32_t	_dma_count_remaining = 0;	// How many bytes left to output after current DMA completes
+	void 		(*_dma_callback)() = nullptr;
 
-	void 		(*_dma_callback)();
-
-	uint8_t interruptMasksUsed;
-	uint32_t interruptMask[(NVIC_NUM_INTERRUPTS+31)/32];
-	uint32_t interruptSave[(NVIC_NUM_INTERRUPTS+31)/32];
-	#ifdef SPI_TRANSACTION_MISMATCH_LED
-	uint8_t inTransactionFlag;
-	#endif
 };
 //===========================================================================================
 
@@ -490,7 +472,7 @@ private:
 /*     32 bit Teensy-LC					  */
 /**********************************************************/
 
-#elif defined(KINETISL)
+#elif defined(__arm__) && defined(TEENSYDUINO) && defined(KINETISL)
 
 class SPISettings {
 public:
@@ -601,51 +583,35 @@ private:
 };
 
 
-class SPIClass {
+class SPIClass { // Teensy-LC
 public:
 	static const uint8_t CNT_MISO_PINS = 2;
 	static const uint8_t CNT_MMOSI_PINS = 2;
 	static const uint8_t CNT_SCK_PINS = 2;
 	static const uint8_t CNT_CS_PINS = 2;
-
 	typedef struct {
 		volatile uint32_t &clock_gate_register;
 		uint32_t clock_gate_mask;
 		uint8_t  br_index;
 		uint8_t  tx_dma_channel;
-		uint8_t	 rx_dma_channel;
-		void	 (*dma_isr)();
+		uint8_t  rx_dma_channel;
+		void     (*dma_isr)();
 		uint8_t  miso_pin[CNT_MISO_PINS];
 		uint8_t  miso_mux[CNT_MISO_PINS];
 		uint8_t  mosi_pin[CNT_MMOSI_PINS];
 		uint8_t  mosi_mux[CNT_MMOSI_PINS];
 		uint8_t  sck_pin[CNT_SCK_PINS];
 		uint8_t  sck_mux[CNT_SCK_PINS];
-		uint8_t	 cs_pin[CNT_CS_PINS];
-		uint8_t	 cs_mux[CNT_CS_PINS];
+		uint8_t  cs_pin[CNT_CS_PINS];
+		uint8_t  cs_mux[CNT_CS_PINS];
 		uint8_t  cs_mask[CNT_CS_PINS];
 	} SPI_Hardware_t;
 	static const SPI_Hardware_t spi0_hardware;
 	static const SPI_Hardware_t spi1_hardware;
+	constexpr SPIClass(uintptr_t myport, uintptr_t myhardware)
+		: port_addr(myport), hardware_addr(myhardware) {
+	}
 	enum DMAState { notAllocated, idle, active, completed};
-
-	SPIClass(KINETISL_SPI_t &myport, const SPI_Hardware_t &myhardware)
-		: port(myport), hardware(myhardware), _transferWriteFill(0), 
-		_dma_state(DMAState::notAllocated)
-	   {
-	   		mosi_pin_index = 0;
-	   		miso_pin_index = 0;
-	   		sck_pin_index = 0;
-	   		interruptMask = 0;
-			interruptSave = 0;
-			_dmaTX = nullptr;
-			_dmaRX = nullptr;
-			#ifdef SPI_TRANSACTION_MISMATCH_LED
-			inTransactionFlag = 0;
-			#endif
-
-		}
-
 
 
 	// Initialize the SPI library
@@ -675,7 +641,7 @@ public:
 	// Before using SPI.transfer() or asserting chip select pins,
 	// this function is used to gain exclusive access to the SPI bus
 	// and configure the correct settings.
-	inline void beginTransaction(SPISettings settings) {
+	void beginTransaction(SPISettings settings) {
 		if (interruptMask) {
 			__disable_irq();
 			interruptSave = NVIC_ICER0 & interruptMask;
@@ -689,29 +655,44 @@ public:
 		}
 		inTransactionFlag = 1;
 		#endif
-		port.C1 = settings.c1;
-		port.BR = settings.br[hardware.br_index];
+		port().C1 = settings.c1;
+		port().BR = settings.br[hardware().br_index];
 	}
 
 	// Write to the SPI bus (MOSI pin) and also receive (MISO pin)
-	inline uint8_t transfer(uint8_t data) {
-		port.DL = data;
-		while (!(port.S & SPI_S_SPRF)) ; // wait
-		return port.DL;
+	uint8_t transfer(uint8_t data) {
+		port().DL = data;
+		while (!(port().S & SPI_S_SPRF)) ; // wait
+		return port().DL;
 	}
-	inline uint16_t transfer16(uint16_t data) {
-		port.C2 = SPI_C2_SPIMODE;
-		port.S;
-		port.DL = data;
-		port.DH = data >> 8;
-		while (!(port.S & SPI_S_SPRF)) ; // wait
-		uint16_t r = port.DL | (port.DH << 8);
-		port.C2 = 0;
-		port.S;
+	uint16_t transfer16(uint16_t data) {
+		port().C2 = SPI_C2_SPIMODE;
+		port().S;
+		port().DL = data;
+		port().DH = data >> 8;
+		while (!(port().S & SPI_S_SPRF)) ; // wait
+		uint16_t r = port().DL | (port().DH << 8);
+		port().C2 = 0;
+		port().S;
 		return r;
 	}
-	inline void transfer(void *buf, size_t count) {
-		transfer(buf, buf, count);
+	void transfer(void *buf, size_t count) {
+		if (count == 0) return;
+		uint8_t *p = (uint8_t *)buf;
+		while (!(port().S & SPI_S_SPTEF)) ; // wait
+		port().DL = *p;
+		while (--count > 0) {
+			uint8_t out = *(p + 1);
+			while (!(port().S & SPI_S_SPTEF)) ; // wait
+			__disable_irq();
+			port().DL = out;
+			while (!(port().S & SPI_S_SPRF)) ; // wait
+			uint8_t in = port().DL;
+			__enable_irq();
+			*p++ = in;
+		}
+		while (!(port().S & SPI_S_SPRF)) ; // wait
+		*p = port().DL;
 	}
 	
 	void setTransferWriteFill(uint16_t ch ) {_transferWriteFill = ch;}
@@ -730,7 +711,7 @@ public:
 
 	// After performing a group of transfers and releasing the chip select
 	// signal, this function allows others to access the SPI bus
-	inline void endTransaction(void) {
+	void endTransaction(void) {
 		#ifdef SPI_TRANSACTION_MISMATCH_LED
 		if (!inTransactionFlag) {
 			pinMode(SPI_TRANSACTION_MISMATCH_LED, OUTPUT);
@@ -749,62 +730,59 @@ public:
 	// This function is deprecated.	 New applications should use
 	// beginTransaction() to configure SPI settings.
 	void setBitOrder(uint8_t bitOrder) {
-		uint8_t c = port.C1 | SPI_C1_SPE;
+		uint8_t c = port().C1 | SPI_C1_SPE;
 		if (bitOrder == LSBFIRST) c |= SPI_C1_LSBFE;
 		else c &= ~SPI_C1_LSBFE;
-		port.C1 = c;
+		port().C1 = c;
 	}
 
 	// This function is deprecated.	 New applications should use
 	// beginTransaction() to configure SPI settings.
 	void setDataMode(uint8_t dataMode) {
-		uint8_t c = port.C1 | SPI_C1_SPE;
+		uint8_t c = port().C1 | SPI_C1_SPE;
 		if (dataMode & 0x04) c |= SPI_C1_CPHA;
 		else c &= ~SPI_C1_CPHA;
 		if (dataMode & 0x08) c |= SPI_C1_CPOL;
 		else c &= ~SPI_C1_CPOL;
-		port.C1 = c;
+		port().C1 = c;
 	}
 
 	// This function is deprecated.	 New applications should use
 	// beginTransaction() to configure SPI settings.
-	inline void setClockDivider(uint8_t clockDiv) {
+	void setClockDivider(uint8_t clockDiv) {
+		unsigned int i = hardware().br_index;
 		if (clockDiv == SPI_CLOCK_DIV2) {
-			port.BR = (SPISettings(12000000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(12000000, MSBFIRST, SPI_MODE0).br[i]);
 		} else if (clockDiv == SPI_CLOCK_DIV4) {
-			port.BR = (SPISettings(4000000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(4000000, MSBFIRST, SPI_MODE0).br[i]);
 		} else if (clockDiv == SPI_CLOCK_DIV8) {
-			port.BR = (SPISettings(2000000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(2000000, MSBFIRST, SPI_MODE0).br[i]);
 		} else if (clockDiv == SPI_CLOCK_DIV16) {
-			port.BR = (SPISettings(1000000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(1000000, MSBFIRST, SPI_MODE0).br[i]);
 		} else if (clockDiv == SPI_CLOCK_DIV32) {
-			port.BR = (SPISettings(500000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(500000, MSBFIRST, SPI_MODE0).br[i]);
 		} else if (clockDiv == SPI_CLOCK_DIV64) {
-			port.BR = (SPISettings(250000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(250000, MSBFIRST, SPI_MODE0).br[i]);
 		} else { /* clockDiv == SPI_CLOCK_DIV128 */
-			port.BR = (SPISettings(125000, MSBFIRST, SPI_MODE0).br[hardware.br_index]);
+			port().BR = (SPISettings(125000, MSBFIRST, SPI_MODE0).br[i]);
 		}
 	}
 
 	// These undocumented functions should not be used.  SPI.transfer()
 	// polls the hardware flag which is automatically cleared as the
 	// AVR responds to SPI's interrupt
-	inline void attachInterrupt() { }
-	inline void detachInterrupt() { }
+	void attachInterrupt() { }
+	void detachInterrupt() { }
 
 	// Teensy LC can use alternate pins for these 3 SPI signals.
-	// Teensy 3.x can use alternate pins for these 3 SPI signals.
 	void setMOSI(uint8_t pin);
 	void setMISO(uint8_t pin);
 	void setSCK(uint8_t pin);
-
-	// helper functions if pin is valid for the SPI special pin
-	bool pinIsMISO(uint8_t pin);
-	bool pinIsMOSI(uint8_t pin);
-	bool pinIsSCK(uint8_t pin);
-
 	// return true if "pin" has special chip select capability
-	bool pinIsChipSelect(uint8_t pin) ;
+	bool pinIsChipSelect(uint8_t pin);
+	bool pinIsMOSI(uint8_t pin);
+	bool pinIsMISO(uint8_t pin);
+	bool pinIsSCK(uint8_t pin);
 	// return true if both pin1 and pin2 have independent chip select capability
 	bool pinIsChipSelect(uint8_t pin1, uint8_t pin2) { return false; }
 	// configure a pin for chip select and return its SPI_MCR_PCSIS bitmask
@@ -812,50 +790,50 @@ public:
 	// programs/sketches.  See the ILI3941_t3 library for an example.
 	uint8_t setCS(uint8_t pin);
 
-	inline KINETISL_SPI_t& SPIRegisters() {return port;}
+	inline KINETISL_SPI_t& SPIRegisters() {return port();}
 	inline uint8_t queueSize() {return 0;}
 
 	// Public now for debug information
 	// DMA Support
-	DMAChannel   *_dmaTX;
-	DMAChannel    *_dmaRX;
+	DMAChannel   *_dmaTX = nullptr;
+	DMAChannel    *_dmaRX = nullptr;
 
 private:
-	bool initDMAChannels();
-	void updateCTAR(uint32_t ctar);
-	void enable_pins(void);
-	void disable_pins(void);
-
-	KINETISL_SPI_t &port;
-	const SPI_Hardware_t &hardware;
-	uint8_t miso_pin_index;
-	uint8_t mosi_pin_index;
-	uint8_t sck_pin_index;
-	uint16_t _transferWriteFill;
-
-	uint8_t      _dma_state;
-	void 		(*_dma_callback)();
-
-	uint32_t interruptMask;
-	uint32_t interruptSave;
+	KINETISL_SPI_t & port() { return *(KINETISL_SPI_t *)port_addr; }
+	const SPI_Hardware_t & hardware() { return *(const SPI_Hardware_t *)hardware_addr; }
+	uintptr_t port_addr;
+	uintptr_t hardware_addr;
+	uint32_t interruptMask = 0;
+	uint32_t interruptSave = 0;
+	uint8_t mosi_pin_index = 0;
+	uint8_t miso_pin_index = 0;
+	uint8_t sck_pin_index = 0;
 	#ifdef SPI_TRANSACTION_MISMATCH_LED
-	uint8_t inTransactionFlag;
+	uint8_t inTransactionFlag = 0;
 	#endif
+
+	uint16_t _transferWriteFill = 0;
+
+	// DMA Support
+	bool initDMAChannels();
+
+	DMAState     _dma_state = DMAState::notAllocated;
+	uint32_t	_dma_count_remaining = 0;	// How many bytes left to output after current DMA completes
+
+	void 		(*_dma_callback)() = nullptr;
 };
 
 
 #endif
 
-#if SPI_INTERFACES_COUNT > 0
-  extern SPIClass SPI;
+extern SPIClass SPI;
+#if defined(__MKL26Z64__)
+extern SPIClass SPI1;
 #endif
-#if SPI_INTERFACES_COUNT > 1
-  extern SPIClass SPI1;
-#endif
-#if SPI_INTERFACES_COUNT > 2
-  extern SPIClass SPI2;
-#endif
+#if defined(__MK64FX512__) || defined(__MK66FX1M0__)
+extern SPIClass SPI1;
+extern SPIClass SPI2;
+#endif	
 
-
-#endif
-#endif
+#endif	// (__arm__) && defined(TEENSYDUINO)
+#endif  // SPIKinetis_h
