@@ -538,6 +538,9 @@ void dumpDMA_TCD(const char *psz, DMABaseClass *dmabc)
 
 #define dontInterruptAtCompletion(dmac) (dmac)->TCD->CSR &= ~DMA_TCD_CSR_INTMAJOR
 
+//=========================================================================
+// Init the DMA channels
+//=========================================================================
 bool SPIClass::initDMAChannels() {
 //	Serial.println("Init DMA Channels"); 
 
@@ -582,9 +585,11 @@ bool SPIClass::initDMAChannels() {
 	return true;
 }
 
+//=========================================================================
+// Main Aync Transfer function
+//=========================================================================
 
-bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callback)(void)) {
-
+bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventResponderRef event_responder) {
 	//Serial.println("Async Transfer called"); Serial.flush();
   	// There are some special casing we may wish to setup.
   	// For logical Write operations: don't use RX but instead just let it stay in ffio
@@ -632,8 +637,7 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callb
 		DMAChanneltransferCount(_dmaRX, count);
 	}
 
-	_dma_callback = callback;
-
+	_dma_event_responder = &event_responder;
 	// Now try to start it?
 	// Setup DMA main object
 #if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
@@ -665,8 +669,10 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callb
 	return true;
 }
 
-bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, void(*callback)(void)) {
-
+//=========================================================================
+// Proposed Async 16 bit transfers
+//=========================================================================
+bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, EventResponderRef event_responder) {
 	//Serial.println("Async Transfer called"); Serial.flush();
   	// There are some special casing we may wish to setup.
   	// For logical Write operations: don't use RX but instead just let it stay in ffio
@@ -713,7 +719,7 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, v
 		DMAChanneltransferCount(_dmaRX, count);
 	}
 
-	_dma_callback = callback;
+	_dma_event_responder = &event_responder;
 
 	// Now try to start it?
 	// Setup DMA main object
@@ -751,18 +757,6 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, v
 }
 
 
-void SPIClass::flush(void) 
-{
-	while (_dma_state == DMAState::active) {
-		yield();
-	}
-}
-
-
-bool SPIClass::done(void)
-{
-	return (_dma_state != DMAState::active);
-}
 
 //-------------------------------------------------------------------------
 // DMA RX ISR
@@ -832,8 +826,9 @@ void SPIClass::dma_rxisr(void) {
 		port().CTAR0  &= ~(SPI_CTAR_FMSZ(8)); 	// Hack restore back to 8 bits
 
 		_dma_state = DMAState::completed;   // set back to 1 in case our call wants to start up dma again
-		if (_dma_callback)
-			(*_dma_callback)();
+		if (_dma_event_responder) {
+			_dma_event_responder->triggerEvent();
+		}
 	}
 
 //	digitalWriteFast(2, LOW);

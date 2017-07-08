@@ -32,8 +32,12 @@
 #include <Arduino.h>
 #include <DMAChannel.h>
 
+// Left this define in - so other code can detect this
+#define USE_EVENT_RESPONDER
+#include <EventResponder.h>
+
 #define SPI_DEBUG_ASYNC_T3X
-//#define SPI_DEBUG_VERBOSE
+#define SPI_DEBUG_VERBOSE
 #define SPI_DEBUG_ASYNC_LC
 
 // SPI_HAS_TRANSACTION means SPI has beginTransaction(), endTransaction(),
@@ -333,10 +337,8 @@ public:
 	void transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count);
 
 	// Asynch support (DMA )
-    bool transfer(const void *txBuffer, void *rxBuffer, size_t count, void(*callback)(void));
-	bool transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count, void(*callback)(void));
-    void flush(void);
-    bool done(void);
+	bool transfer(const void *txBuffer, void *rxBuffer, size_t count,  EventResponderRef  event_responder);
+	bool transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count, EventResponderRef event_responder);
 
 	friend void _spi_dma_rxISR0(void);
 	friend void _spi_dma_rxISR1(void);
@@ -460,8 +462,7 @@ private:
 	bool initDMAChannels();
 	DMAState     _dma_state = DMAState::notAllocated;
 	uint32_t	_dma_count_remaining = 0;	// How many bytes left to output after current DMA completes
-	void 		(*_dma_callback)() = nullptr;
-
+	EventResponder *_dma_event_responder = nullptr;
 };
 //===========================================================================================
 
@@ -700,10 +701,10 @@ public:
 	void transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count);
 
 	// Asynch support (DMA )
-    bool transfer(const void *txBuffer, void *rxBuffer, size_t count, void(*callback)(void));
+	bool transfer(const void *txBuffer, void *rxBuffer, size_t count, void(*callback)(void));
 	bool transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count, void(*callback)(void));
-    void flush(void);
-    bool done(void);
+	void flush(void);
+	bool done(void);
 
 	friend void _spi_dma_rxISR0(void);
 	friend void _spi_dma_rxISR1(void);
