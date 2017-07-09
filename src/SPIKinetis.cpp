@@ -605,6 +605,16 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventRespon
 	if (_dma_state == DMAState::active)
 		return false; // already active
 
+	if (count < 2) {
+		// Use non-async version to simplify cases...
+#if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
+//		Serial.printf("DMA count: %d, not async\n", count);
+#endif
+		transfer(buf, retbuf, count);
+		event_responder.triggerEvent();
+		return true;
+	}
+
 	// Now handle the cases where the count > then how many we can output in one DMA request
 	if (count > hardware().max_dma_count) {
 		_dma_count_remaining = count - hardware().max_dma_count;
@@ -687,6 +697,15 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
 
 	if (_dma_state == DMAState::active)
 		return false; // already active
+	if (count < 2) {
+		// Use non-async version to simplify cases...
+#if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
+//		Serial.printf("DMA count: %d, not async\n", count);
+#endif
+		transfer16(buf, retbuf, count);
+		event_responder.triggerEvent();
+		return true;
+	}
 
 	// Now handle the cases where the count > then how many we can output in one DMA request
 	if (count > hardware().max_dma_count) {
@@ -826,9 +845,7 @@ void SPIClass::dma_rxisr(void) {
 		port().CTAR0  &= ~(SPI_CTAR_FMSZ(8)); 	// Hack restore back to 8 bits
 
 		_dma_state = DMAState::completed;   // set back to 1 in case our call wants to start up dma again
-		if (_dma_event_responder) {
-			_dma_event_responder->triggerEvent();
-		}
+		_dma_event_responder->triggerEvent();
 	}
 
 //	digitalWriteFast(2, LOW);
@@ -1209,8 +1226,7 @@ void SPIClass::dma_isr(void) {
 	_dmaRX->clearComplete();
 
 	_dma_state = DMAState::completed;   // set back to 1 in case our call wants to start up dma again
-	if (_dma_callback)
-		(*_dma_callback)();
+	_dma_event_responder->triggerEvent();
 }
 
 bool SPIClass::initDMAChannels() {
@@ -1244,8 +1260,10 @@ bool SPIClass::initDMAChannels() {
 	return true;
 }
 
-bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callback)(void))
-{
+//=========================================================================
+// Main Aync Transfer function
+//=========================================================================
+bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventResponderRef event_responder) {
 	if (_dma_state == DMAState::notAllocated) {
 		if (!initDMAChannels()) {
 			return false;
@@ -1255,6 +1273,12 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callb
 	if (_dma_state == DMAState::active)
 		return false; // already active
 
+	if (count < 2) {
+		// Use non-async version to simplify cases...
+		transfer(buf, retbuf, count);
+		event_responder.triggerEvent();
+		return true;
+	}
 	//_dmaTX->destination((volatile uint8_t&)port().DL);
 	//_dmaRX->source((volatile uint8_t&)port().DL);
 	_dmaTX->CFG->DCR = (_dmaTX->CFG->DCR & ~DMA_DCR_DSIZE(3)) | DMA_DCR_DSIZE(1);
@@ -1278,7 +1302,8 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callb
 		_dmaRX->destination(_dma_dummy_rx);    // NULL ?
 		_dmaRX->transferCount(count);
 	}
-	_dma_callback = callback;
+
+	_dma_event_responder = &event_responder;
 
 	//Serial.println("Before DMA C2");
 	// Try pushing the first character
@@ -1296,8 +1321,7 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, void(*callb
     return true;
 }
 
-bool SPIClass::transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count, void(*callback)(void)) 
-{
+bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, EventResponderRef event_responder) {
 	if (_dma_state == DMAState::notAllocated) {
 		if (!initDMAChannels()) {
 			return false;
@@ -1306,6 +1330,13 @@ bool SPIClass::transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count,
   
 	if (_dma_state == DMAState::active)
 		return false; // already active
+
+	if (count < 2) {
+		// Use non-async version to simplify cases...
+		transfer16(buf, retbuf, count);
+		event_responder.triggerEvent();
+		return true;
+	}
 
 	port().C2 = SPI_C2_SPIMODE;	// turn on 16 bit mode
 	port().S;
@@ -1333,7 +1364,8 @@ bool SPIClass::transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count,
 		_dmaRX->destination(_dma_dummy_rx);    // NULL ?
 		_dmaRX->transferCount(count*2);
 	}
-	_dma_callback = callback;
+
+	_dma_event_responder = &event_responder;
 
 	//Serial.println("Before DMA C2");
 	// Try pushing the first character
@@ -1352,19 +1384,6 @@ bool SPIClass::transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count,
     return true;
 }
 
-
-void SPIClass::flush(void) 
-{
-	while (_dma_state == DMAState::active) {
-		yield();
-	}
-}
-
-
-bool SPIClass::done(void)
-{
-	return (_dma_state == DMAState::completed);
-}
 
 #ifdef SPI_DEBUG_ASYNC_LC
 void dumpDMA_CFG(const char* psz, DMABaseClass *dmabc)
