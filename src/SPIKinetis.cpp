@@ -605,6 +605,7 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventRespon
 	if (_dma_state == DMAState::active)
 		return false; // already active
 
+	event_responder.clearEvent();	// Make sure it is not set yet
 	if (count < 2) {
 		// Use non-async version to simplify cases...
 #if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
@@ -650,11 +651,12 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventRespon
 	_dma_event_responder = &event_responder;
 	// Now try to start it?
 	// Setup DMA main object
-#if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
+#if 0 //defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
 	Serial.printf("DMA count: %d, dump TCDs %d %d\n", count, _dmaTX->channel,  _dmaRX->channel);
 	dumpDMA_TCD("TX:",_dmaTX);
 	dumpDMA_TCD("RX:",_dmaRX);
 #endif
+	yield();
 	port().MCR = SPI_MCR_MSTR | SPI_MCR_CLR_RXF | SPI_MCR_CLR_TXF | SPI_MCR_PCSIS(0x1F);
 
 	port().SR = 0xFF0F0000;
@@ -697,6 +699,11 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
 
 	if (_dma_state == DMAState::active)
 		return false; // already active
+
+//	digitalWriteFast(1, HIGH);
+	event_responder.clearEvent();	// Make sure it is not set yet
+	_dma_event_responder = &event_responder;
+
 	if (count < 2) {
 		// Use non-async version to simplify cases...
 #if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
@@ -738,17 +745,20 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
 		DMAChanneltransferCount(_dmaRX, count);
 	}
 
-	_dma_event_responder = &event_responder;
 
 	// Now try to start it?
 	// Setup DMA main object
 #if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
-	Serial.printf("DMA16 %x %x count: %d,  dump TCDs %d %d\n", (uint32_t)buf, (uint32_t)retbuf, count, _dmaTX->channel,  _dmaRX->channel);
-	dumpDMA_TCD("TX:",_dmaTX);
-	dumpDMA_TCD("RX:",_dmaRX);
+//	Serial.printf("DMA16 %x %x count: %d,  dump TCDs %d %d\n", (uint32_t)buf, (uint32_t)retbuf, count, _dmaTX->channel,  _dmaRX->channel);
+//	dumpDMA_TCD("TX:",_dmaTX);
+//	dumpDMA_TCD("RX:",_dmaRX);
+	//delayMicroseconds(1000);
+	//delay(1);
+	yield();
 #endif
 	// Hack - It appears that for DMA SPI on T3.2 and T3.6, that they only work with CTAR 0... SO make
 	// CTAR0 16 bit
+	port().MCR = SPI_MCR_MSTR | SPI_MCR_HALT | SPI_MCR_PCSIS(0x1F);
 	port().CTAR0 |= SPI_CTAR_FMSZ(8); 	// Hack convert from 8 bit to 16 bit...
 
 	port().MCR = SPI_MCR_MSTR | SPI_MCR_CLR_RXF | SPI_MCR_PCSIS(0x1F);
@@ -772,6 +782,7 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
 	}
 
 	_dma_state = DMAState::active;
+//	digitalWriteFast(1, LOW);
 	return true;
 }
 
@@ -783,7 +794,7 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
 void SPIClass::dma_rxisr(void) {
 //  Serial.println("_spi_dma_rxISR");
 //	digitalWriteFast(2, HIGH);
-#if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
+#if 0//defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
 	Serial.printf("DMA end dump TCDs %d %d Remaining: %d\n", _dmaTX->channel,  _dmaRX->channel, _dma_count_remaining);
 	dumpDMA_TCD("TX:",_dmaTX);
 	dumpDMA_TCD("RX:",_dmaRX);
@@ -831,7 +842,7 @@ void SPIClass::dma_rxisr(void) {
 		_dmaRX->enable();
 		if (should_reenable_tx)
 			_dmaTX->enable();
-#if defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
+#if 0// defined(SPI_DEBUG_ASYNC_T3X) && defined(SPI_DEBUG_VERBOSE)
 		Serial.printf("DMA end restart dump TCDs %d %d Remaining: %d RSER: %x SR:%x MCR: %x\n", _dmaTX->channel,  _dmaRX->channel, 
 			_dma_count_remaining, port().RSER, port().SR, port().MCR);
 		dumpDMA_TCD("TX:",_dmaTX);
@@ -845,7 +856,9 @@ void SPIClass::dma_rxisr(void) {
 		port().CTAR0  &= ~(SPI_CTAR_FMSZ(8)); 	// Hack restore back to 8 bits
 
 		_dma_state = DMAState::completed;   // set back to 1 in case our call wants to start up dma again
+//		digitalWriteFast(0, !digitalReadFast(0));
 		_dma_event_responder->triggerEvent();
+
 	}
 
 //	digitalWriteFast(2, LOW);
@@ -1273,6 +1286,8 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventRespon
 	if (_dma_state == DMAState::active)
 		return false; // already active
 
+	event_responder.clearEvent();	// Make sure it is not set yet
+
 	if (count < 2) {
 		// Use non-async version to simplify cases...
 		transfer(buf, retbuf, count);
@@ -1330,6 +1345,8 @@ bool SPIClass::transfer16(const uint16_t *buf, uint16_t *retbuf, size_t count, E
   
 	if (_dma_state == DMAState::active)
 		return false; // already active
+
+	event_responder.clearEvent();	// Make sure it is not set yet
 
 	if (count < 2) {
 		// Use non-async version to simplify cases...

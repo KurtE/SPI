@@ -37,7 +37,7 @@
 #include <EventResponder.h>
 
 #define SPI_DEBUG_ASYNC_T3X
-//#define SPI_DEBUG_VERBOSE
+#define SPI_DEBUG_VERBOSE
 #define SPI_DEBUG_ASYNC_LC
 
 // SPI_HAS_TRANSACTION means SPI has beginTransaction(), endTransaction(),
@@ -331,7 +331,7 @@ public:
 		while (!(port().SR & SPI_SR_TCF)) ; // wait
 		return port().POPR;
 	}
-	void transfer(void *buf, size_t count);
+	void inline transfer(void *buf, size_t count) {transfer(buf, buf, count);}
 	void setTransferWriteFill(uint16_t ch ) {_transferWriteFill = ch;}
 	void transfer(const void * buf, void * retbuf, size_t count);
 	void transfer16(const uint16_t * buf, uint16_t * retbuf, size_t count);
