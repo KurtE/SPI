@@ -1690,6 +1690,12 @@ void SPIClass::transfer(const void * buf, void * retbuf, size_t count)
 	// Lets clear the reader queue
 	port().CR = LPSPI_CR_RRF | LPSPI_CR_MEN;	// clear the queue and make sure still enabled. 
 
+	if (_tcr_framesiz != LPSPI_TCR_FRAMESZ(7)) {
+		_tcr_framesiz = LPSPI_TCR_FRAMESZ(7);
+		uint32_t tcr = port().TCR;
+		port().TCR = (tcr & 0xfffff000) | LPSPI_TCR_FRAMESZ(7);  // turn on 16 bit mode 
+	}
+
 	while (count > 0) {
 		// Push out the next byte; 
 		port().TDR = p_write? *p_write++ : _transferWriteFill;
@@ -1873,6 +1879,7 @@ bool SPIClass::transfer(const void *buf, void *retbuf, size_t count, EventRespon
 	// Make sure port is in 8 bit mode and clear watermark
 	port().TCR = (port().TCR & ~(LPSPI_TCR_FRAMESZ(31))) | LPSPI_TCR_FRAMESZ(7);	
 	port().FCR = 0; 
+	_tcr_framesiz = LPSPI_TCR_FRAMESZ(7);
 
 	// Lets try to output the first byte to make sure that we are in 8 bit mode...
  	port().DER = LPSPI_DER_TDDE | LPSPI_DER_RDDE;	//enable DMA on both TX and RX

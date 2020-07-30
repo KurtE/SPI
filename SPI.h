@@ -1229,6 +1229,7 @@ public:
 		port().CFGR1 = LPSPI_CFGR1_MASTER | LPSPI_CFGR1_SAMPLE;
 		port().CCR = _ccr;
 		port().TCR = settings.tcr;
+		_tcr_framesiz = LPSPI_TCR_FRAMESZ(7);  // we init this in the tcr of settings. 
 		port().CR = LPSPI_CR_MEN;
 
 	}
@@ -1236,6 +1237,11 @@ public:
 	// Write to the SPI bus (MOSI pin) and also receive (MISO pin)
 	uint8_t transfer(uint8_t data) {
 		// TODO: check for space in fifo?
+		if (_tcr_framesiz != LPSPI_TCR_FRAMESZ(7)) {
+			_tcr_framesiz = LPSPI_TCR_FRAMESZ(7);
+			uint32_t tcr = port().TCR;
+			port().TCR = (tcr & 0xfffff000) | LPSPI_TCR_FRAMESZ(7);  // turn on 16 bit mode 
+		}
 		port().TDR = data;
 		while (1) {
 			uint32_t fifo = (port().FSR >> 16) & 0x1F;
@@ -1247,11 +1253,13 @@ public:
 		//return port().POPR;
 	}
 	uint16_t transfer16(uint16_t data) {
-		uint32_t tcr = port().TCR;
-		port().TCR = (tcr & 0xfffff000) | LPSPI_TCR_FRAMESZ(15);  // turn on 16 bit mode 
+		if (_tcr_framesiz != LPSPI_TCR_FRAMESZ(15)) {
+			_tcr_framesiz = LPSPI_TCR_FRAMESZ(15);
+			uint32_t tcr = port().TCR;
+			port().TCR = (tcr & 0xfffff000) | LPSPI_TCR_FRAMESZ(15);  // turn on 16 bit mode 
+		}
 		port().TDR = data;		// output 16 bit data.
 		while ((port().RSR & LPSPI_RSR_RXEMPTY)) ;	// wait while the RSR fifo is empty...
-		port().TCR = tcr;	// restore back
 		return port().RDR;
 	}
 
@@ -1352,6 +1360,7 @@ private:
 
 	uint32_t _clock = 0;
 	uint32_t _ccr = 0;
+	uint32_t _tcr_framesiz = 0;
 
 	//KINETISK_SPI_t & port() { return *(KINETISK_SPI_t *)port_addr; }
 //	IMXRT_LPSPI_t * const port;
